@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Filings Analyst</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f5f8ff;
+    --paper-2: #e6efff;
+    --ink: #0d1b3e;
+    --ink-2: #44567f;
+    --accent: #1a5cff;
+    --accent-soft: rgba(26, 92, 255, 0.10);
+    --glass: rgba(255, 255, 255, 0.64);
+    --line: rgba(26, 92, 255, 0.16);
+    --radius: 6px;
+    --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Source Serif 4", Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    color: var(--ink);
+    font: 15px/1.5 var(--sans);
+    background: linear-gradient(160deg, var(--paper) 0%, var(--paper-2) 100%) fixed;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 24px 48px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+  h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+  .library { color: var(--ink-2); font-size: 13px; }
+
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+
+  form.ask { display: flex; gap: 8px; padding: 8px; }
+  form.ask input {
+    flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink);
+    font: 17px/1.4 var(--sans); padding: 10px 12px; outline: none;
+  }
+  form.ask input::placeholder { color: var(--ink-2); opacity: 0.8; }
+  button {
+    font: 600 14px var(--sans); border-radius: 4px; padding: 10px 16px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  }
+  button.quiet { background: transparent; color: var(--accent); }
+  button:disabled { opacity: 0.55; cursor: progress; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .hint { color: var(--ink-2); font-size: 13px; margin: 8px 2px 22px; min-height: 20px; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  section.result { padding: 24px 28px; min-height: 320px; }
+  aside.viewer { position: sticky; top: 16px; max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+
+  .answer { font: 18px/1.62 var(--serif); max-width: 68ch; white-space: pre-wrap; }
+  .cite {
+    font: 600 12px var(--sans); color: var(--accent); background: var(--accent-soft);
+    border: 0; border-radius: 3px; padding: 1px 5px; margin: 0 1px; vertical-align: 2px; cursor: pointer;
+  }
+  .cite[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+  .check { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+  .check strong { color: var(--ink); }
+  .check.passed strong { color: var(--accent); }
+  h2 { font-size: 13px; font-weight: 700; margin: 22px 0 8px; }
+  ul.plain { list-style: none; padding: 0; margin: 0; }
+  ul.plain li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  ul.plain li:last-child { border-bottom: 0; }
+  code { font: 13px var(--sans); font-variant-numeric: tabular-nums; }
+
+  .hit { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .hit:last-child { border-bottom: 0; }
+  .hit button { all: unset; cursor: pointer; font-weight: 600; color: var(--ink); }
+  .hit button:hover, .hit button:focus-visible { color: var(--accent); }
+  .hit .where { color: var(--ink-2); font-size: 12px; margin: 2px 0 6px; }
+  .hit .snippet { font-size: 14px; white-space: pre-wrap; max-height: 7.5em; overflow: hidden; }
+
+  .viewer .bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 18px;
+                 border-bottom: 1px solid var(--line); }
+  .viewer .bar .title { font-weight: 600; font-size: 14px; }
+  .viewer .bar .sub { color: var(--ink-2); font-size: 12px; }
+  .viewer .bar nav { display: flex; gap: 6px; }
+  .viewer .bar nav button { padding: 6px 10px; }
+  .pagetext { padding: 16px 18px 22px; overflow: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.55;
+              font-variant-numeric: tabular-nums; }
+  mark { background: var(--accent-soft); color: var(--ink); border-bottom: 2px solid var(--accent); padding: 0 1px; }
+  .empty { color: var(--ink-2); padding: 28px 18px; font-size: 14px; }
+  .error { color: var(--ink); border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); }
+
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    aside.viewer { position: static; max-height: none; }
+    section.result { padding: 18px; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    mark { transition: background 0.2s; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Filings Analyst</h1>
+    <span class="library" id="library">Loading library…</span>
+  </header>
+
+  <form class="ask glass" id="form">
+    <input id="q" name="q" autocomplete="off" aria-label="Question"
+           placeholder="What was 3M's FY2018 capital expenditure, based on the cash flow statement?">
+    <button type="submit" id="askBtn">Ask</button>
+    <button type="button" class="quiet" id="searchBtn">Search pages</button>
+  </form>
+  <div class="hint" id="hint">Ask a question for a cited answer, or search to browse the matching pages.</div>
+
+  <main>
+    <section class="result glass" id="result" aria-live="polite">
+      <div class="empty">Answers appear here with a citation for every figure. Select a citation to open the page it came from.</div>
+    </section>
+    <aside class="viewer glass" aria-label="Source page">
+      <div class="bar">
+        <div><div class="title" id="vTitle">No page open</div><div class="sub" id="vSub"></div></div>
+        <nav><button class="quiet" id="prev" aria-label="Previous page" disabled>Prev</button>
+             <button class="quiet" id="next" aria-label="Next page" disabled>Next</button></nav>
+      </div>
+      <div class="pagetext" id="vText"><div class="empty">The page behind a citation or search result opens here, with the figures from the answer highlighted.</div></div>
+    </aside>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let canAsk = false, current = null, highlight = [];
+
+async function api(path, body) {
+  const res = await fetch(path, body ? {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)} : {});
+  const data = await res.json().catch(() => ({error: "The server returned an unreadable response."}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
+  return data;
+}
+
+function numbersIn(text) {
+  const out = new Set();
+  for (const m of String(text).matchAll(/\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d{3,}/g)) {
+    const n = m[0].replace(/,/g, "");
+    if (!/^(19|20)\d\d$/.test(n)) out.add(n);
+  }
+  return [...out];
+}
+
+function markNumbers(text, nums) {
+  let html = esc(text);
+  if (!nums.length) return html;
+  return html.replace(/\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d{3,}/g, (m) => nums.includes(m.replace(/,/g, "")) ? `<mark>${m}</mark>` : m);
+}
+
+function markTerms(text, query) {
+  const terms = [...new Set(query.toLowerCase().match(/[a-z]{4,}/g) || [])];
+  let html = esc(text);
+  for (const t of terms) html = html.replace(new RegExp(`\\b(${t}\\w*)`, "gi"), "<mark>$1</mark>");
+  return html;
+}
+
+async function openPage(docId, page, nums = highlight) {
+  try {
+    const p = await api(`/api/page?doc_id=${encodeURIComponent(docId)}&page=${page}`);
+    current = p;
+    $("vTitle").textContent = `${p.label}, page ${p.page} of ${p.pages}`;
+    $("vSub").textContent = [p.title, p.section].filter(Boolean).join(", ");
+    $("vText").innerHTML = markNumbers(p.text, nums);
+    $("prev").disabled = p.page <= 1;
+    $("next").disabled = p.page >= p.pages;
+    const first = $("vText").querySelector("mark");
+    if (first) first.scrollIntoView({block: "center"});
+  } catch (e) {
+    $("vText").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+$("prev").onclick = () => current && openPage(current.doc_id, current.page - 1);
+$("next").onclick = () => current && openPage(current.doc_id, current.page + 1);
+
+function busy(on, label) {
+  $("askBtn").disabled = $("searchBtn").disabled = on;
+  if (label) $("hint").textContent = label;
+}
+
+async function doSearch() {
+  const query = $("q").value.trim();
+  if (!query) { $("hint").textContent = "Type a question or keywords first."; return; }
+  busy(true, "Searching the filings…");
+  try {
+    const r = await api("/api/search", {query, k: 8});
+    highlight = numbersIn(query);
+    $("hint").textContent = `Searched ${r.filter}. ${r.hits.length} pages in ${Math.round(Object.values(r.timings_ms).reduce((a, b) => a + b, 0))} ms.`;
+    $("result").innerHTML = r.hits.length ? r.hits.map((h, i) => `
+      <div class="hit">
+        <button data-doc="${esc(h.doc_id)}" data-page="${h.page}">${esc(h.doc_id)}, page ${h.page}</button>
+        <div class="where">${esc(h.header)}</div>
+        <div class="snippet">${markTerms(h.text, query)}</div>
+      </div>`).join("") : `<div class="empty">No pages matched. Try the company name and fiscal year, or name the statement you need.</div>`;
+    $("result").querySelectorAll(".hit button").forEach((b) => b.onclick = () => openPage(b.dataset.doc, +b.dataset.page, []));
+    if (r.hits[0]) openPage(r.hits[0].doc_id, r.hits[0].page, []);
+  } catch (e) {
+    $("result").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    $("hint").textContent = "";
+  } finally { busy(false); }
+}
+
+async function doAsk() {
+  const question = $("q").value.trim();
+  if (!question) { $("hint").textContent = "Type a question first."; return; }
+  if (!canAsk) { doSearch(); return; }
+  busy(true, "Researching: searching, reading pages and checking figures. This takes 10 to 60 seconds.");
+  try {
+    const r = await api("/api/ask", {question});
+    const v = r.verification;
+    highlight = numbersIn(r.answer);
+    const answer = esc(r.answer).replace(/\[(S\d+(?:\s*,\s*S\d+)*)\]/g, (m, ids) =>
+      ids.split(",").map((id) => `<button class="cite" data-id="${id.trim()}">${id.trim()}</button>`).join(""));
+    const sources = r.sources.map((s) => `<li><button class="cite" data-id="${s.id}">${s.id}</button> ${esc(s.doc_id)}, page ${s.page}</li>`).join("");
+    const calcs = r.calculations.map((c) => `<li><code>${esc(c.expression)} = ${+c.result.toFixed(6)}</code></li>`).join("");
+    const status = v.passed
+      ? `<strong>Verified.</strong> ${v.numbers_checked} figure${v.numbers_checked === 1 ? "" : "s"} matched the cited pages or a calculation.`
+      : `<strong>Not verified.</strong> ${v.ungrounded.length ? "Unmatched figures: " + esc(v.ungrounded.join(", ")) + "." : ""} ${v.citations.length ? "" : "No citations."}`;
+    $("result").innerHTML = `
+      <div class="answer">${answer}</div>
+      <div class="check ${v.passed ? "passed" : ""}">${status} ${r.steps.filter((s) => s.kind === "tool").length} tool calls, ${(r.latency_ms / 1000).toFixed(1)} s.</div>
+      ${sources ? `<h2>Sources</h2><ul class="plain">${sources}</ul>` : ""}
+      ${calcs ? `<h2>Calculations</h2><ul class="plain">${calcs}</ul>` : ""}`;
+    const byId = Object.fromEntries(r.sources.map((s) => [s.id, s]));
+    $("result").querySelectorAll(".cite").forEach((b) => b.onclick = () => {
+      $("result").querySelectorAll(".cite").forEach((x) => x.setAttribute("aria-pressed", x.dataset.id === b.dataset.id));
+      const s = byId[b.dataset.id];
+      if (s) openPage(s.doc_id, s.page);
+    });
+    $("hint").textContent = "";
+    if (r.sources[0]) openPage(r.sources[0].doc_id, r.sources[0].page);
+  } catch (e) {
+    $("result").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    $("hint").textContent = "";
+  } finally { busy(false); }
+}
+
+$("form").onsubmit = (e) => { e.preventDefault(); doAsk(); };
+$("searchBtn").onclick = doSearch;
+
+api("/api/info").then((i) => {
+  canAsk = i.can_ask;
+  $("library").textContent = `${i.documents.toLocaleString()} filings, ${i.pages.toLocaleString()} pages`;
+  if (!canAsk) {
+    $("askBtn").textContent = "Search";
+    $("searchBtn").hidden = true;
+    $("hint").textContent = "Search mode: no model is configured, so results are the matching pages. Start the server with a provider to get cited answers.";
+  }
+}).catch(() => { $("library").textContent = "Library unavailable"; });
+</script>
+</body>
+</html>
