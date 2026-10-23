@@ -11,14 +11,23 @@ from pathlib import Path
 DEFAULT_INDEX = "data/index"
 
 
+def _llm(args, provider: str | None = None, model: str | None = None):
+    from .agent.llm import make_llm
+
+    provider = provider or args.provider
+    if model is None and provider == args.provider:
+        model = args.model  # another provider gets its own default model, not this one's name
+    kwargs = {"cache": False} if provider == "anthropic" and getattr(args, "no_prompt_cache", False) else {}
+    return make_llm(provider, model, **kwargs)
+
+
 def _analyst_factory(args, searcher):
     if not getattr(args, "provider", None):
         return None
     from .agent.analyst import Analyst
-    from .agent.llm import make_llm
 
     def factory() -> Analyst:
-        return Analyst(make_llm(args.provider, args.model), searcher, max_steps=args.max_steps)
+        return Analyst(_llm(args), searcher, max_steps=args.max_steps)
 
     return factory
 
@@ -143,7 +152,6 @@ def cmd_eval_retrieval(args) -> None:
 
 def cmd_eval_answers(args) -> None:
     from .agent.analyst import Analyst
-    from .agent.llm import make_llm
     from .eval import answers
     from .eval.financebench import load_questions
 
@@ -151,11 +159,11 @@ def cmd_eval_answers(args) -> None:
     if args.limit:
         questions = questions[: args.limit]
     searcher = _searcher(args)
-    judge = make_llm(args.judge_provider or args.provider, args.judge_model or args.model) if args.judge else None
-    report = answers.run(questions, lambda: Analyst(make_llm(args.provider, args.model), searcher,
-                                                    max_steps=args.max_steps),
+    judge = _llm(args, args.judge_provider, args.judge_model) if args.judge else None
+    pricing = answers.Pricing(args.price_in, args.price_out, args.price_cache_read, args.price_cache_write)
+    report = answers.run(questions, lambda: Analyst(_llm(args), searcher, max_steps=args.max_steps),
                          judge_llm=judge, oracle_filing=args.filing_given, workers=args.workers,
-                         price_per_mtok=(args.price_in, args.price_out))
+                         price_per_mtok=pricing)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     name = f"answers-{args.provider}-{args.split}"
@@ -174,6 +182,8 @@ def main(argv: list[str] | None = None) -> None:
         sp.add_argument("--provider", choices=["anthropic", "openai"], required=required)
         sp.add_argument("--model", default=None)
         sp.add_argument("--max-steps", type=int, default=12)
+        sp.add_argument("--no-prompt-cache", action="store_true",
+                        help="don't send cache_control (for gateways that reject it); Anthropic only")
 
     s = sub.add_parser("index", help="index filings from a FinanceBench clone or a folder of PDFs/HTML")
     s.add_argument("--financebench", help="path to a clone of github.com/patronus-ai/financebench")
@@ -230,6 +240,10 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--workers", type=int, default=4)
     s.add_argument("--price-in", type=float, default=0.0, help="USD per million input tokens")
     s.add_argument("--price-out", type=float, default=0.0, help="USD per million output tokens")
+    s.add_argument("--price-cache-read", type=float, default=None,
+                   help="USD per million cached input tokens read (default 0.1x --price-in)")
+    s.add_argument("--price-cache-write", type=float, default=None,
+                   help="USD per million input tokens written to the cache (default 1.25x --price-in)")
     s.add_argument("--out", default="reports")
     llm_args(s, required=True)
     s.set_defaults(func=cmd_eval_answers)

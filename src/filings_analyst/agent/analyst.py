@@ -41,6 +41,8 @@ class AnalystResult:
     steps: list[Step] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     latency_ms: float = 0.0
     stopped: str = "answered"  # answered | max_steps | error
     error: str | None = None
@@ -60,7 +62,8 @@ class AnalystResult:
             "verification": self.verification.to_dict(), "sources": self.cited_sources(),
             "calculations": [{"expression": c.expression, "result": c.result} for c in self.ledger.calculations],
             "steps": [{"kind": s.kind, **s.detail, "ms": round(s.ms, 1)} for s in self.steps],
-            "usage": {"input_tokens": self.input_tokens, "output_tokens": self.output_tokens},
+            "usage": {"input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
+                      "cache_read_tokens": self.cache_read_tokens, "cache_write_tokens": self.cache_write_tokens},
             "latency_ms": round(self.latency_ms, 1), "stopped": self.stopped, "error": self.error,
         }
 
@@ -87,6 +90,8 @@ class Analyst:
                 break
             result.input_tokens += resp.input_tokens
             result.output_tokens += resp.output_tokens
+            result.cache_read_tokens += resp.cache_read_tokens
+            result.cache_write_tokens += resp.cache_write_tokens
             result.steps.append(Step("model", {"text": resp.text[:500], "tool_calls": [c.name for c in resp.tool_calls]},
                                      (time.perf_counter() - t) * 1000))
             messages.append({"role": "assistant", "content": resp.text, "tool_calls": resp.tool_calls})

@@ -135,8 +135,9 @@ def test_analyst_researches_calculates_and_cites(searcher):
     llm = ScriptedLLM([
         LLMResponse("", [call("search_filings", query="Acme FY2023 cash flow statement capital expenditure")],
                     input_tokens=100, output_tokens=10),
-        LLMResponse("", [call("read_page", doc_id="ACME_2023_10K", page=5)]),
-        LLMResponse("", [call("calculate", expression="(1577 - 1373) / 1373 * 100")]),
+        LLMResponse("", [call("read_page", doc_id="ACME_2023_10K", page=5)], cache_read_tokens=700,
+                    cache_write_tokens=300),
+        LLMResponse("", [call("calculate", expression="(1577 - 1373) / 1373 * 100")], cache_read_tokens=1000),
         LLMResponse("", [call("submit_answer", answer=GOOD.replace("[S1]", "[{sid}]"), confidence="high")]),
     ])
 
@@ -159,7 +160,8 @@ def test_analyst_researches_calculates_and_cites(searcher):
     assert (page["doc_id"], page["page"]) == ("ACME_2023_10K", 5)
     d = result.to_dict()
     assert d["calculations"][0]["result"] == pytest.approx(14.858, abs=1e-3)
-    assert d["usage"]["input_tokens"] == 100 and json.dumps(d)
+    assert d["usage"] == {"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 1700,
+                          "cache_write_tokens": 300} and json.dumps(d)
 
 
 def test_analyst_revises_after_failed_verification(searcher):
@@ -235,12 +237,17 @@ def test_anthropic_wire_format(monkeypatch):
         return httpx.Response(200, json={"content": [{"type": "text", "text": "ok "},
                                                      {"type": "tool_use", "id": "t3", "name": "calculate",
                                                       "input": {"expression": "3"}}],
-                                         "stop_reason": "tool_use", "usage": {"input_tokens": 11, "output_tokens": 4}})
+                                         "stop_reason": "tool_use",
+                                         "usage": {"input_tokens": 11, "output_tokens": 4,
+                                                   "cache_read_input_tokens": 900, "cache_creation_input_tokens": 60}})
 
     resp = AnthropicLLM("claude-sonnet-5-5", client=_client(handler)).complete("sys", TRANSCRIPT, TOOLS)
     assert seen["headers"]["x-api-key"] == "sk-test" and seen["headers"]["anthropic-version"] == "2023-06-01"
     body = seen["body"]
-    assert body["system"] == "sys" and body["tools"][0]["input_schema"]["type"] == "object"
+    # Breakpoint on the system prompt (caches tools + system), automatic caching for the transcript.
+    assert body["system"] == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+    assert body["cache_control"] == {"type": "ephemeral"}
+    assert body["tools"][0]["input_schema"]["type"] == "object"
     assert [m["role"] for m in body["messages"]] == ["user", "assistant", "user"]
     results = body["messages"][2]["content"]
     assert [r["tool_use_id"] for r in results] == ["t1", "t2"] and results[1]["is_error"] is True
@@ -248,6 +255,23 @@ def test_anthropic_wire_format(monkeypatch):
                                                  "input": {"expression": "1+1"}}
     assert resp.text == "ok " and resp.tool_calls[0].arguments == {"expression": "3"}
     assert (resp.input_tokens, resp.output_tokens, resp.stop_reason) == (11, 4, "tool_use")
+    assert (resp.cache_read_tokens, resp.cache_write_tokens) == (900, 60)
+
+
+def test_anthropic_cache_placement():
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "correct"}]})
+
+    one_shot = [{"role": "user", "content": "grade this"}]
+    AnthropicLLM(client=_client(handler)).complete("judge", one_shot, [])
+    AnthropicLLM(client=_client(handler), cache=False).complete("sys", TRANSCRIPT, TOOLS)
+    # A tool-less one-shot call has a unique tail: cache the shared system prompt only.
+    assert bodies[0]["system"][0]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in bodies[0]
+    # cache=False sends the original request shape, for gateways that reject cache_control.
+    assert bodies[1]["system"] == "sys" and "cache_control" not in bodies[1]
 
 
 def test_openai_wire_format(monkeypatch):
@@ -261,7 +285,7 @@ def test_openai_wire_format(monkeypatch):
                                              "function": {"name": "calculate", "arguments": '{"expression": "4"}'}},
                                             {"id": "c2", "type": "function",
                                              "function": {"name": "calculate", "arguments": "{oops"}}]}}],
-            "usage": {"prompt_tokens": 7, "completion_tokens": 2}})
+            "usage": {"prompt_tokens": 7, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 5}}})
 
     resp = OpenAICompatLLM(client=_client(handler)).complete("sys", TRANSCRIPT, TOOLS)
     body = seen["body"]
@@ -269,7 +293,8 @@ def test_openai_wire_format(monkeypatch):
     assert [m["role"] for m in body["messages"]] == ["system", "user", "assistant", "tool", "tool"]
     assert json.loads(body["messages"][2]["tool_calls"][0]["function"]["arguments"]) == {"expression": "1+1"}
     assert resp.tool_calls[0].arguments == {"expression": "4"} and resp.tool_calls[1].arguments == {"_raw": "{oops"}
-    assert (resp.input_tokens, resp.output_tokens) == (7, 2)
+    # OpenAI counts cached tokens inside prompt_tokens; input_tokens is the full-price remainder.
+    assert (resp.input_tokens, resp.cache_read_tokens, resp.output_tokens) == (2, 5, 2)
 
 
 def test_retries_then_fails(monkeypatch):

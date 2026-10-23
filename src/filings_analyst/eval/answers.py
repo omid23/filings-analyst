@@ -49,6 +49,25 @@ class AnswerRow:
     output_tokens: int
     latency_ms: float
     stopped: str
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class Pricing:
+    """USD per million tokens. Cache rates default to Anthropic's multipliers on the input price
+    (reads 0.1x, 5-minute writes 1.25x); pass them explicitly for models or providers that differ."""
+
+    input: float = 0.0
+    output: float = 0.0
+    cache_read: float | None = None
+    cache_write: float | None = None
+
+    def cost(self, r: AnswerRow) -> float:
+        read = self.input * 0.1 if self.cache_read is None else self.cache_read
+        write = self.input * 1.25 if self.cache_write is None else self.cache_write
+        return (r.input_tokens * self.input + r.output_tokens * self.output
+                + r.cache_read_tokens * read + r.cache_write_tokens * write) / 1e6
 
 
 def gold_number(gold: str):
@@ -93,11 +112,13 @@ def score(q: Question, r: AnalystResult, judge_llm: LLM | None) -> AnswerRow:
         grounded=r.verification.passed, grounded_ratio=r.verification.grounded_ratio,
         cited_gold_page=bool(cited_pages & q.gold_pages), steps=len(r.steps),
         input_tokens=r.input_tokens, output_tokens=r.output_tokens, latency_ms=r.latency_ms, stopped=r.stopped,
+        cache_read_tokens=r.cache_read_tokens, cache_write_tokens=r.cache_write_tokens,
     )
 
 
 def run(questions: list[Question], make_analyst: Callable[[], Analyst], *, judge_llm: LLM | None = None,
-        oracle_filing: bool = False, workers: int = 4, price_per_mtok: tuple[float, float] = (0.0, 0.0)) -> dict:
+        oracle_filing: bool = False, workers: int = 4,
+        price_per_mtok: Pricing | tuple[float, ...] = (0.0, 0.0)) -> dict:
     def one(q: Question) -> AnswerRow:
         analyst = make_analyst()
         result = analyst.run(q.question, doc_ids=[q.doc_id] if oracle_filing else None)
@@ -109,10 +130,12 @@ def run(questions: list[Question], make_analyst: Callable[[], Analyst], *, judge
             "rows": [asdict(r) for r in rows]}
 
 
-def summarize(rows: list[AnswerRow], price_per_mtok: tuple[float, float] = (0.0, 0.0)) -> dict:
+def summarize(rows: list[AnswerRow], price_per_mtok: Pricing | tuple[float, ...] = (0.0, 0.0)) -> dict:
+    pricing = price_per_mtok if isinstance(price_per_mtok, Pricing) else Pricing(*price_per_mtok)
     n = len(rows) or 1
     numeric = [r for r in rows if r.numeric is not None]
     judged = [r for r in rows if r.judge in ("correct", "incorrect", "refusal")]
+    prompt_tokens = sum(r.input_tokens + r.cache_read_tokens + r.cache_write_tokens for r in rows)
     s = {
         "n": len(rows),
         "numeric_n": len(numeric),
@@ -124,8 +147,8 @@ def summarize(rows: list[AnswerRow], price_per_mtok: tuple[float, float] = (0.0,
         "cited_gold_page": round(sum(r.cited_gold_page for r in rows) / n, 4),
         "avg_steps": round(statistics.mean(r.steps for r in rows), 2) if rows else 0,
         "latency_p50_s": round(statistics.median(r.latency_ms for r in rows) / 1000, 2) if rows else 0,
-        "cost_per_question_usd": round(sum(r.input_tokens * price_per_mtok[0] + r.output_tokens * price_per_mtok[1]
-                                           for r in rows) / 1e6 / n, 5),
+        "cache_hit_rate": round(sum(r.cache_read_tokens for r in rows) / prompt_tokens, 4) if prompt_tokens else None,
+        "cost_per_question_usd": round(sum(pricing.cost(r) for r in rows) / n, 5),
     }
     return s
 
@@ -147,6 +170,7 @@ def to_markdown(report: dict, title: str) -> str:
         f"| cited an annotator's evidence page | {pct(s['cited_gold_page'])} |",
         f"| avg steps | {s['avg_steps']} |",
         f"| p50 latency | {s['latency_p50_s']} s |",
+        f"| prompt tokens served from cache | {pct(s['cache_hit_rate'])} |",
         f"| cost per question | ${s['cost_per_question_usd']:.4f} |", "",
     ])
 

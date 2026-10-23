@@ -278,3 +278,17 @@ def test_answer_eval_harness(searcher, financebench):
     assert s["cost_per_question_usd"] == pytest.approx((50 * 3 + 20 * 15) / 1e6)
     assert "| numeric answers correct (1) | 100.0% |" in answers.to_markdown(report, "mini")
     assert "JUDGE" not in answers.JUDGE_PROMPT and answers.judge(ScriptedLLM([]), qs[0], "x") == "error"
+    assert s["cache_hit_rate"] == 0.0
+
+
+def test_cache_aware_pricing():
+    row = answers.AnswerRow("q", "t", "test", "a", "g", None, None, True, 1.0, False, 3, input_tokens=1_000,
+                            output_tokens=500, latency_ms=1.0, stopped="answered", cache_read_tokens=8_000,
+                            cache_write_tokens=2_000)
+    # Defaults: reads at 0.1x and writes at 1.25x the input price.
+    assert answers.Pricing(3.0, 15.0).cost(row) == pytest.approx((1_000 * 3 + 500 * 15 + 8_000 * 0.3 + 2_000 * 3.75) / 1e6)
+    assert answers.Pricing(4.0, 20.0, cache_read=0.2, cache_write=5.0).cost(row) == pytest.approx(
+        (1_000 * 4 + 500 * 20 + 8_000 * 0.2 + 2_000 * 5) / 1e6)
+    s = answers.summarize([row], (3.0, 15.0))  # a plain (input, output) tuple still works
+    assert s["cache_hit_rate"] == pytest.approx(8_000 / 11_000, abs=1e-4)
+    assert s["cost_per_question_usd"] == pytest.approx(answers.Pricing(3.0, 15.0).cost(row), abs=1e-5)

@@ -41,10 +41,12 @@ class LLMResponse:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     stop_reason: str = ""
-    input_tokens: int = 0
+    input_tokens: int = 0  # billed at the full input rate (excludes cache reads and writes)
     output_tokens: int = 0
     model: str = ""
     latency_ms: float = 0.0
+    cache_read_tokens: int = 0  # prompt tokens served from the provider's prompt cache
+    cache_write_tokens: int = 0  # prompt tokens written to the cache (Anthropic bills a write premium)
 
 
 class LLMError(Exception):
@@ -80,12 +82,24 @@ def _post_with_retry(client: httpx.Client, url: str, headers: dict, body: dict, 
 
 
 class AnthropicLLM:
+    """Messages API adapter with prompt caching.
+
+    The agent re-sends the system prompt, the tool schemas and the whole transcript (full filing
+    pages included) on every step, so without caching input cost grows with the square of the
+    step count. Two breakpoints cover it: an explicit one on the system prompt, which caches
+    tools + system once for every question, and top-level automatic caching, which moves along
+    the growing transcript so each step reads the previous one. Tool-less one-shot calls (the
+    eval judge) skip the transcript breakpoint: their tail is unique and would only pay the
+    write premium.
+    """
+
     name = "anthropic"
 
     def __init__(self, model: str = "claude-sonnet-5-5", *, max_tokens: int = 2048, api_key_env: str = "ANTHROPIC_API_KEY",
-                 base_url: str = "https://api.anthropic.com", retries: int = 3, client: httpx.Client | None = None):
+                 base_url: str = "https://api.anthropic.com", retries: int = 3, cache: bool = True,
+                 client: httpx.Client | None = None):
         self.model, self.max_tokens, self.api_key_env = model, max_tokens, api_key_env
-        self.base_url, self.retries = base_url.rstrip("/"), retries
+        self.base_url, self.retries, self.cache = base_url.rstrip("/"), retries, cache
         self._client = client or httpx.Client(timeout=120)
 
     @staticmethod
@@ -122,6 +136,11 @@ class AnthropicLLM:
         }
         if tools:
             body["tools"] = [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in tools]
+        if self.cache:
+            # Tools render before system, so this breakpoint caches both.
+            body["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+            if tools:
+                body["cache_control"] = {"type": "ephemeral"}
         headers = {"x-api-key": os.environ.get(self.api_key_env, ""), "anthropic-version": "2023-06-01",
                    "content-type": "application/json"}
         started = time.perf_counter()
@@ -135,7 +154,9 @@ class AnthropicLLM:
         usage = data.get("usage") or {}
         return LLMResponse("".join(text), calls, data.get("stop_reason", ""), int(usage.get("input_tokens") or 0),
                            int(usage.get("output_tokens") or 0), data.get("model", self.model),
-                           (time.perf_counter() - started) * 1000)
+                           (time.perf_counter() - started) * 1000,
+                           cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+                           cache_write_tokens=int(usage.get("cache_creation_input_tokens") or 0))
 
 
 class OpenAICompatLLM:
@@ -190,9 +211,13 @@ class OpenAICompatLLM:
                 args = {"_raw": fn.get("arguments")}
             calls.append(ToolCall(tc.get("id", ""), fn.get("name", ""), args if isinstance(args, dict) else {}))
         usage = data.get("usage") or {}
+        # OpenAI caches automatically and counts cached tokens inside prompt_tokens; split them out
+        # so input_tokens means "billed at the full rate" for every provider.
+        cached = int((usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
         return LLMResponse(msg.get("content") or "", calls, choice.get("finish_reason", ""),
-                           int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0),
-                           data.get("model", self.model), (time.perf_counter() - started) * 1000)
+                           int(usage.get("prompt_tokens") or 0) - cached, int(usage.get("completion_tokens") or 0),
+                           data.get("model", self.model), (time.perf_counter() - started) * 1000,
+                           cache_read_tokens=cached)
 
 
 class ScriptedLLM:
