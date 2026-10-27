@@ -1,4 +1,5 @@
-"""Model adapters with tool calling: Anthropic Messages API and OpenAI-compatible chat.
+"""Model adapters with tool calling: Anthropic Messages API and OpenAI-compatible chat
+(Google Cloud Vertex AI is in ``vertex.py``).
 
 The agent works on a provider-neutral transcript:
 
@@ -27,6 +28,7 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    extra: dict[str, Any] = field(default_factory=dict)  # provider data echoed back verbatim (Gemini thought signatures)
 
 
 @dataclass
@@ -127,6 +129,12 @@ class AnthropicLLM:
                     out.append({"role": "user", "content": [block]})
         return out
 
+    def _request(self, body: dict) -> tuple[str, dict, dict]:
+        """URL, headers and body for one Messages call (Claude on Vertex AI overrides this)."""
+        headers = {"x-api-key": os.environ.get(self.api_key_env, ""), "anthropic-version": "2023-06-01",
+                   "content-type": "application/json"}
+        return f"{self.base_url}/v1/messages", headers, body
+
     def complete(self, system: str, messages: list[dict], tools: Sequence[ToolSpec]) -> LLMResponse:
         body: dict[str, Any] = {
             "model": self.model,
@@ -141,10 +149,9 @@ class AnthropicLLM:
             body["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
             if tools:
                 body["cache_control"] = {"type": "ephemeral"}
-        headers = {"x-api-key": os.environ.get(self.api_key_env, ""), "anthropic-version": "2023-06-01",
-                   "content-type": "application/json"}
+        url, headers, body = self._request(body)
         started = time.perf_counter()
-        data = _post_with_retry(self._client, f"{self.base_url}/v1/messages", headers, body, self.retries)
+        data = _post_with_retry(self._client, url, headers, body, self.retries)
         text, calls = [], []
         for block in data.get("content") or []:
             if block.get("type") == "text":
@@ -247,4 +254,8 @@ def make_llm(provider: str, model: str | None = None, **kwargs) -> LLM:
         return AnthropicLLM(model or "claude-sonnet-5-5", **kwargs)
     if provider == "openai":
         return OpenAICompatLLM(model or "gpt-6-luna", **kwargs)
-    raise ValueError(f"unknown provider '{provider}' (anthropic | openai)")
+    if provider == "vertex":
+        from .vertex import make_vertex_llm
+
+        return make_vertex_llm(model, **kwargs)
+    raise ValueError(f"unknown provider '{provider}' (anthropic | openai | vertex)")

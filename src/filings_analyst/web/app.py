@@ -73,8 +73,8 @@ def create_app(searcher: Searcher, analyst_factory: Callable[[], Analyst] | None
 
     async def ask(request: Request) -> Response:
         if analyst_factory is None:
-            return JSONResponse({"error": "No model is configured. Start the server with --provider anthropic or "
-                                          "--provider openai and the matching API key to ask questions. Search works "
+            return JSONResponse({"error": "No model is configured. Start the server with --provider anthropic, "
+                                          "openai or vertex and the matching credentials to ask questions. Search works "
                                           "without one."}, 503)
         body = await request.json()
         question = str(body.get("question") or "").strip()

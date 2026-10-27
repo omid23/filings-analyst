@@ -56,13 +56,17 @@ cited answer + sources + calculations + verification report
 - `SectionRouter` boosts pages whose section or statement matches what the question asks for.
 
 **Agent** (`agent/`)
-- The tool loop is provider-neutral. Adapters for the Anthropic Messages API and OpenAI-compatible chat (OpenAI, Azure, vLLM, Ollama) are plain `httpx`, with retries on 429/5xx/529.
+- The tool loop is provider-neutral. Adapters for the Anthropic Messages API, OpenAI-compatible chat (OpenAI, Azure, vLLM, Ollama) and Google Cloud Vertex AI are plain `httpx`, with retries on 429/5xx/529.
+- `--provider vertex` runs Gemini through `generateContent`, or Claude through Vertex's `rawPredict` when `--model` starts with `claude`:
+  - auth is an OAuth token from Application Default Credentials (`pip install 'filings-analyst[gcp]'`), the gcloud CLI, or `GOOGLE_OAUTH_ACCESS_TOKEN`; tokens are shared across eval workers and renewed before they expire;
+  - the project and region come from `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` (default `global`);
+  - Gemini's thought signatures are sent back with each function call, which Gemini 3 models require, and parallel calls and their responses are grouped the way Vertex expects.
 - Every step re-sends the system prompt, the tool schemas and the transcript, full filing pages included, so the Anthropic adapter uses prompt caching:
   - one breakpoint on the system prompt caches tools + system across all questions;
   - top-level automatic caching follows the growing transcript, so each step reads the previous step's prefix at the cache-read rate instead of paying full price again;
   - tool-less one-shot calls (the eval judge) cache only the system prompt, since their unique tail would only pay the write premium;
   - `--no-prompt-cache` turns it off for gateways that reject `cache_control`.
-- Usage is split into full-price input, cache reads and cache writes for both providers (OpenAI's `cached_tokens` are separated out of `prompt_tokens`).
+- Usage is split into full-price input, cache reads and cache writes for every provider (OpenAI's `cached_tokens` and Gemini's implicit-cache `cachedContentTokenCount` are separated out of the prompt count). Claude on Vertex uses the same cache breakpoints as the Anthropic adapter.
 - `calculate` is a safe AST evaluator, not `eval`. It understands `$1,577`, `(1,577)`, `12%`, `×` and `÷`.
 - The verifier is deterministic, so the model cannot argue its way past it. It catches invented numbers, figures from uncited pages, and citations that were never retrieved.
 - Filing text is treated as data. The system prompt tells the model to ignore instructions found inside tool results.
@@ -134,7 +138,7 @@ Requires Python 3.10+.
 
 ```bash
 pip install -e ".[dev]"            # add ".[fastembed]" for neural embeddings
-pytest -q                          # 73 tests, fully offline, about 3 s
+pytest -q                          # 80 tests, fully offline, about 3 s
 ```
 
 **FinanceBench**
@@ -161,6 +165,11 @@ filings-analyst index --folder ~/filings      # files named COMPANY_PERIOD_FORM.
 export ANTHROPIC_API_KEY=...                  # or OPENAI_API_KEY with --provider openai
 filings-analyst ask "How did Netflix's operating margin change from FY2021 to FY2022?" --provider anthropic
 filings-analyst serve --provider anthropic    # http://127.0.0.1:8700, MCP at /mcp
+
+gcloud auth application-default login        # Google Cloud Vertex AI
+export GOOGLE_CLOUD_PROJECT=my-project       # optional: GOOGLE_CLOUD_LOCATION (default global)
+filings-analyst ask "..." --provider vertex                            # Gemini (gemini-3.5-flash)
+filings-analyst ask "..." --provider vertex --model claude-sonnet-5-5  # Claude on Vertex
 ```
 
 **Docker** (expects an index in `./data/index`)

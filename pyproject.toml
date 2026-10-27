@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 fastembed = ["fastembed>=0.4"]
+gcp = ["google-auth[requests]>=2.29"]  # Application Default Credentials for --provider vertex
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
 
 [project.scripts]

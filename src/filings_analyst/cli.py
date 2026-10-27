@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_INDEX = "data/index"
+PROVIDERS = ["anthropic", "openai", "vertex"]
 
 
 def _llm(args, provider: str | None = None, model: str | None = None):
@@ -17,7 +18,7 @@ def _llm(args, provider: str | None = None, model: str | None = None):
     provider = provider or args.provider
     if model is None and provider == args.provider:
         model = args.model  # another provider gets its own default model, not this one's name
-    kwargs = {"cache": False} if provider == "anthropic" and getattr(args, "no_prompt_cache", False) else {}
+    kwargs = {"cache": False} if getattr(args, "no_prompt_cache", False) and provider in ("anthropic", "vertex") else {}
     return make_llm(provider, model, **kwargs)
 
 
@@ -99,7 +100,7 @@ def cmd_ask(args) -> None:
     searcher = _searcher(args)
     factory = _analyst_factory(args, searcher)
     if factory is None:
-        sys.exit("--provider is required (anthropic or openai)")
+        sys.exit("--provider is required (anthropic, openai or vertex)")
     result = factory().run(args.question, args.doc or None)
     if args.json:
         print(json.dumps(result.to_dict(), indent=1))
@@ -179,11 +180,12 @@ def main(argv: list[str] | None = None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def llm_args(sp, required=False):
-        sp.add_argument("--provider", choices=["anthropic", "openai"], required=required)
+        sp.add_argument("--provider", choices=PROVIDERS, required=required,
+                        help="vertex = Google Cloud Vertex AI: Gemini, or Claude with --model claude-*")
         sp.add_argument("--model", default=None)
         sp.add_argument("--max-steps", type=int, default=12)
         sp.add_argument("--no-prompt-cache", action="store_true",
-                        help="don't send cache_control (for gateways that reject it); Anthropic only")
+                        help="don't send cache_control (for gateways that reject it); Claude only")
 
     s = sub.add_parser("index", help="index filings from a FinanceBench clone or a folder of PDFs/HTML")
     s.add_argument("--financebench", help="path to a clone of github.com/patronus-ai/financebench")
@@ -235,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--limit", type=int, default=0)
     s.add_argument("--filing-given", action="store_true", help="tell the agent which filing to use")
     s.add_argument("--judge", action="store_true", help="also grade with an LLM judge")
-    s.add_argument("--judge-provider", choices=["anthropic", "openai"])
+    s.add_argument("--judge-provider", choices=PROVIDERS)
     s.add_argument("--judge-model")
     s.add_argument("--workers", type=int, default=4)
     s.add_argument("--price-in", type=float, default=0.0, help="USD per million input tokens")
